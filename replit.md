@@ -16,6 +16,34 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - **API codegen**: Orval (from OpenAPI spec)
 - **Build**: esbuild (CJS bundle)
 
+## Artifacts
+
+### Chat App (Expo Mobile — `artifacts/chat-app/`)
+Real-time WhatsApp-style chat app built with:
+- **Firebase** (Auth, Firestore, Storage)
+- **react-native-gifted-chat** for WhatsApp-like UI
+- **expo-image-picker** for image sharing
+- **Anonymous authentication** — no account needed
+- **3 public chat rooms**: General, Random, Tech Talk
+
+**Required Firebase Secrets** (set in Replit Secrets panel):
+| Secret Key | Description |
+|---|---|
+| `EXPO_PUBLIC_FIREBASE_API_KEY` | Firebase API Key |
+| `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN` | Firebase Auth Domain |
+| `EXPO_PUBLIC_FIREBASE_PROJECT_ID` | Firebase Project ID |
+| `EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET` | Firebase Storage Bucket |
+| `EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` | Firebase Messaging Sender ID |
+| `EXPO_PUBLIC_FIREBASE_APP_ID` | Firebase App ID |
+
+**Firebase Console Setup Required:**
+1. Authentication → Sign-in method → Enable "Anonymous"
+2. Firestore Database → Create database (test mode for dev)
+3. Storage → Get started (for image sharing)
+
+### API Server (`artifacts/api-server/`)
+Express 5 + TypeScript backend with Drizzle ORM.
+
 ## Key Commands
 
 - `pnpm run typecheck` — full typecheck across all packages
