@@ -196,26 +196,22 @@ export default function ChatRoomScreen() {
       const formData = new FormData();
       formData.append('file', blob, fileName);
 
-      console.log('[FileUpload] Uploading to File.io...');
+      console.log('[FileUpload] Uploading to GoFile...');
 
-      const uploadResponse = await fetch('https://file.io', {
+      const uploadResponse = await fetch('https://store1.gofile.io/uploadFile', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
         body: formData,
       });
 
       const data = (await uploadResponse.json()) as {
-        success?: boolean;
-        link?: string;
-        error?: string;
+        status?: string;
+        data?: { downloadPage?: string };
       };
 
-      console.log('[FileUpload] File.io response:', JSON.stringify(data));
+      console.log('[FileUpload] GoFile response:', JSON.stringify(data));
 
-      if (!uploadResponse.ok || !data.success || !data.link) {
-        throw new Error(data.error ?? 'File.io upload failed');
+      if (!uploadResponse.ok || data.status !== 'ok' || !data.data?.downloadPage) {
+        throw new Error(`GoFile upload failed: ${JSON.stringify(data)}`);
       }
 
       const fileId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
@@ -223,7 +219,7 @@ export default function ChatRoomScreen() {
         _id: fileId,
         text: '',
         createdAt: new Date(),
-        fileUrl: data.link,
+        fileUrl: data.data.downloadPage,
         fileName: fileName,
         fileType: asset.mimeType ?? 'application/octet-stream',
         user: { _id: user!.uid, name: user!.displayName, avatar: user!.avatarColor },
@@ -231,8 +227,9 @@ export default function ChatRoomScreen() {
       await onSend([fileMessage]);
       console.log('[FileUpload] File message sent successfully.');
     } catch (err) {
-      console.error('[FileUpload] Error:', err);
-      Alert.alert('Upload failed', 'Could not upload file. Please try again.');
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[FileUpload] Error:', msg);
+      Alert.alert('Upload failed', msg);
     } finally {
       setUploadingFile(false);
     }
