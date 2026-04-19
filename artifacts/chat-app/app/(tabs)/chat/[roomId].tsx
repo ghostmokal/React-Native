@@ -8,7 +8,7 @@ import {
   query,
   serverTimestamp,
 } from 'firebase/firestore';
-import { uploadImageToImgBB } from '@/lib/api';
+
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -136,6 +136,76 @@ export default function ChatRoomScreen() {
     [user, roomId, isConfigured]
   );
 
+  // --- Upload helpers ---
+
+  // Uploads image to ImgBB via API server (key stays server-side).
+  // Uses arrayBuffer → manual base64 — no FileReader or Blob polyfill needed.
+  const uploadImageToImgBB = async (uri: string): Promise<string> => {
+    try {
+      const res = await fetch(uri);
+      const arrayBuffer = await res.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuffer);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binary);
+
+      const domain = process.env.EXPO_PUBLIC_DOMAIN;
+      const apiBase = domain ? `https://${domain}/api` : '/api';
+
+      const uploadRes = await fetch(`${apiBase}/upload-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: base64, name: `chat-${Date.now()}` }),
+      });
+
+      const data = (await uploadRes.json()) as { url?: string; error?: string };
+      if (!uploadRes.ok || !data.url) throw new Error(data.error ?? 'ImgBB upload failed');
+      return data.url;
+    } catch (err) {
+      console.log('ImgBB Error:', err);
+      throw err;
+    }
+  };
+
+  // Uploads any file directly to GoFile.
+  // Uses React Native's { uri, name, type } FormData pattern — no Blob or FileReader needed.
+  const uploadFileToGoFile = async (
+    uri: string,
+    name: string,
+    type: string
+  ): Promise<string> => {
+    try {
+      const formData = new FormData();
+      formData.append('file', { uri, name, type } as any);
+
+      console.log('GoFile: uploading', name, type, uri);
+
+      const uploadRes = await fetch('https://store1.gofile.io/uploadFile', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = (await uploadRes.json()) as {
+        status?: string;
+        data?: { downloadPage?: string };
+      };
+
+      console.log('GoFile: response', JSON.stringify(data));
+
+      if (!uploadRes.ok || data.status !== 'ok' || !data.data?.downloadPage) {
+        throw new Error(`GoFile upload failed: ${JSON.stringify(data)}`);
+      }
+      return data.data.downloadPage;
+    } catch (err) {
+      console.log('GoFile Error:', err);
+      throw err;
+    }
+  };
+
+  // --- Picker handlers ---
+
   const pickAndUploadImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -151,21 +221,20 @@ export default function ChatRoomScreen() {
 
     if (result.canceled || !result.assets[0]) return;
 
-    const uri = result.assets[0].uri;
     setUploading(true);
     try {
-      const downloadURL = await uploadImageToImgBB(uri);
+      const downloadURL = await uploadImageToImgBB(result.assets[0].uri);
       const fileId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
-      const imageMessage: ChatMessage = {
+      await onSend([{
         _id: fileId,
         text: '',
         createdAt: new Date(),
         image: downloadURL,
         user: { _id: user!.uid, name: user!.displayName, avatar: user!.avatarColor },
-      };
-      await onSend([imageMessage]);
-    } catch {
-      Alert.alert('Upload failed', 'Could not upload image. Please try again.');
+      }]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert('Image upload failed', msg);
     } finally {
       setUploading(false);
     }
@@ -181,55 +250,29 @@ export default function ChatRoomScreen() {
       if (result.canceled || !result.assets?.[0]) return;
 
       const asset = result.assets[0];
-      const fileUri = asset.uri;
-      const fileName = asset.name;
-
       setUploadingFile(true);
 
-      console.log('[FileUpload] Picked file:', fileName, fileUri, asset.mimeType);
+      console.log('GoFile: picked', asset.name, asset.uri, asset.mimeType);
 
-      const response = await fetch(fileUri);
-      const blob = await response.blob();
-
-      console.log('[FileUpload] Blob size:', blob.size, 'type:', blob.type);
-
-      const formData = new FormData();
-      formData.append('file', blob, fileName);
-
-      console.log('[FileUpload] Uploading to GoFile...');
-
-      const uploadResponse = await fetch('https://store1.gofile.io/uploadFile', {
-        method: 'POST',
-        body: formData,
-      });
-
-      const data = (await uploadResponse.json()) as {
-        status?: string;
-        data?: { downloadPage?: string };
-      };
-
-      console.log('[FileUpload] GoFile response:', JSON.stringify(data));
-
-      if (!uploadResponse.ok || data.status !== 'ok' || !data.data?.downloadPage) {
-        throw new Error(`GoFile upload failed: ${JSON.stringify(data)}`);
-      }
+      const downloadPage = await uploadFileToGoFile(
+        asset.uri,
+        asset.name,
+        asset.mimeType ?? 'application/octet-stream'
+      );
 
       const fileId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
-      const fileMessage: ChatMessage = {
+      await onSend([{
         _id: fileId,
         text: '',
         createdAt: new Date(),
-        fileUrl: data.data.downloadPage,
-        fileName: fileName,
+        fileUrl: downloadPage,
+        fileName: asset.name,
         fileType: asset.mimeType ?? 'application/octet-stream',
         user: { _id: user!.uid, name: user!.displayName, avatar: user!.avatarColor },
-      };
-      await onSend([fileMessage]);
-      console.log('[FileUpload] File message sent successfully.');
+      } as ChatMessage]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error('[FileUpload] Error:', msg);
-      Alert.alert('Upload failed', msg);
+      Alert.alert('File upload failed', msg);
     } finally {
       setUploadingFile(false);
     }
