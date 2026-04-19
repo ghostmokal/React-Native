@@ -42,3 +42,13 @@ externalPort = 3000
 [[ports]]
 localPort = 21128
 externalPort = 3003
+
+[userenv]
+
+[userenv.shared]
+
+[userenv.development]
+IMGBB_API_KEY = "71a759da5bc401158bd6c127ddb78bf9"
+
+[userenv.production]
+IMGBB_API_KEY = "71a759da5bc401158bd6c127ddb78bf9"

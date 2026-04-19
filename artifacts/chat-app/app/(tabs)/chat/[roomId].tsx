@@ -8,7 +8,7 @@ import {
   query,
   serverTimestamp,
 } from 'firebase/firestore';
-import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
+import { uploadImageToImgBB } from '@/lib/api';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -34,7 +34,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/context/AuthContext';
 import { useColors } from '@/hooks/useColors';
-import { db, storage } from '@/lib/firebase';
+import { db } from '@/lib/firebase';
 
 const ROOM_NAMES: Record<string, string> = {
   general: 'General',
@@ -127,18 +127,10 @@ export default function ChatRoomScreen() {
     const uri = result.assets[0].uri;
     setUploading(true);
     try {
-      const response = await fetch(uri);
-      const blob = await response.blob();
+      const downloadURL = await uploadImageToImgBB(uri);
+
       const fileId =
         Date.now().toString() + Math.random().toString(36).substring(2, 9);
-      const storageRef = ref(storage, `chat-images/${roomId}/${fileId}`);
-      const uploadTask = uploadBytesResumable(storageRef, blob);
-
-      await new Promise<void>((resolve, reject) => {
-        uploadTask.on('state_changed', null, reject, resolve);
-      });
-
-      const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
 
       const imageMessage: IMessage = {
         _id: fileId,
