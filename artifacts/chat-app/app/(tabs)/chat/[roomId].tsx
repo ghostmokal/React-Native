@@ -8,7 +8,7 @@ import {
   query,
   serverTimestamp,
 } from 'firebase/firestore';
-import { uploadImageToImgBB, uploadFileToFileIO } from '@/lib/api';
+import { uploadImageToImgBB } from '@/lib/api';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -183,24 +183,49 @@ export default function ChatRoomScreen() {
       const asset = result.assets[0];
       setUploadingFile(true);
 
-      const fileUrl = await uploadFileToFileIO(
-        asset.uri,
-        asset.name,
-        asset.mimeType ?? 'application/octet-stream'
-      );
+      console.log('[FileUpload] Picked file:', asset.name, asset.uri, asset.mimeType);
+
+      const fetchResponse = await fetch(asset.uri);
+      const blob = await fetchResponse.blob();
+
+      console.log('[FileUpload] Blob size:', blob.size, 'type:', blob.type);
+
+      const formData = new FormData();
+      formData.append('file', blob, asset.name);
+
+      console.log('[FileUpload] Uploading to File.io...');
+
+      const uploadResponse = await fetch('https://file.io?expires=14d', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = (await uploadResponse.json()) as {
+        success?: boolean;
+        link?: string;
+        error?: string;
+      };
+
+      console.log('[FileUpload] File.io response:', JSON.stringify(data));
+
+      if (!uploadResponse.ok || !data.success || !data.link) {
+        throw new Error(data.error ?? 'File.io upload failed');
+      }
 
       const fileId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
       const fileMessage: ChatMessage = {
         _id: fileId,
         text: '',
         createdAt: new Date(),
-        fileUrl,
+        fileUrl: data.link,
         fileName: asset.name,
         fileType: asset.mimeType ?? 'application/octet-stream',
         user: { _id: user!.uid, name: user!.displayName, avatar: user!.avatarColor },
       };
       await onSend([fileMessage]);
-    } catch {
+      console.log('[FileUpload] File message sent successfully.');
+    } catch (err) {
+      console.error('[FileUpload] Error:', err);
       Alert.alert('Upload failed', 'Could not upload file. Please try again.');
     } finally {
       setUploadingFile(false);
