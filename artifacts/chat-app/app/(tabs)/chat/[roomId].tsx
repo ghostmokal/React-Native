@@ -181,22 +181,28 @@ export default function ChatRoomScreen() {
       if (result.canceled || !result.assets?.[0]) return;
 
       const asset = result.assets[0];
+      const fileUri = asset.uri;
+      const fileName = asset.name;
+
       setUploadingFile(true);
 
-      console.log('[FileUpload] Picked file:', asset.name, asset.uri, asset.mimeType);
+      console.log('[FileUpload] Picked file:', fileName, fileUri, asset.mimeType);
 
-      const fetchResponse = await fetch(asset.uri);
-      const blob = await fetchResponse.blob();
+      const response = await fetch(fileUri);
+      const blob = await response.blob();
 
       console.log('[FileUpload] Blob size:', blob.size, 'type:', blob.type);
 
       const formData = new FormData();
-      formData.append('file', blob, asset.name);
+      formData.append('file', blob, fileName);
 
       console.log('[FileUpload] Uploading to File.io...');
 
-      const uploadResponse = await fetch('https://file.io?expires=14d', {
+      const uploadResponse = await fetch('https://file.io', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
         body: formData,
       });
 
@@ -218,7 +224,7 @@ export default function ChatRoomScreen() {
         text: '',
         createdAt: new Date(),
         fileUrl: data.link,
-        fileName: asset.name,
+        fileName: fileName,
         fileType: asset.mimeType ?? 'application/octet-stream',
         user: { _id: user!.uid, name: user!.displayName, avatar: user!.avatarColor },
       };
