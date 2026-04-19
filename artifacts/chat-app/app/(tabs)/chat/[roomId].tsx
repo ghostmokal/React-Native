@@ -8,14 +8,16 @@ import {
   query,
   serverTimestamp,
 } from 'firebase/firestore';
-import { uploadImageToImgBB } from '@/lib/api';
+import { uploadImageToImgBB, uploadFileToFileIO } from '@/lib/api';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import * as DocumentPicker from 'expo-document-picker';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Platform,
   StyleSheet,
   Text,
@@ -23,7 +25,6 @@ import {
   View,
 } from 'react-native';
 import {
-  Actions,
   Bubble,
   GiftedChat,
   IMessage,
@@ -42,14 +43,34 @@ const ROOM_NAMES: Record<string, string> = {
   tech: 'Tech Talk',
 };
 
+type ChatMessage = IMessage & {
+  fileUrl?: string;
+  fileName?: string;
+  fileType?: string;
+};
+
+function getFileIcon(fileName: string): string {
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  if (['pdf'].includes(ext)) return 'document-text';
+  if (['doc', 'docx'].includes(ext)) return 'document';
+  if (['xls', 'xlsx', 'csv'].includes(ext)) return 'grid';
+  if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return 'archive';
+  if (['mp3', 'wav', 'aac', 'm4a'].includes(ext)) return 'musical-note';
+  if (['mp4', 'mov', 'avi', 'mkv'].includes(ext)) return 'videocam';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext)) return 'image';
+  return 'attach';
+}
+
 export default function ChatRoomScreen() {
   const { roomId } = useLocalSearchParams<{ roomId: string }>();
   const { user } = useAuth();
   const router = useRouter();
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const [messages, setMessages] = useState<IMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadingFile, setUploadingFile] = useState(false);
+
   const isConfigured = !!(
     process.env.EXPO_PUBLIC_FIREBASE_API_KEY &&
     process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID
@@ -67,13 +88,16 @@ export default function ChatRoomScreen() {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const msgs: IMessage[] = snapshot.docs.map((doc) => {
+      const msgs: ChatMessage[] = snapshot.docs.map((doc) => {
         const data = doc.data();
         return {
           _id: doc.id,
           text: data['text'] ?? '',
           createdAt: data['createdAt']?.toDate?.() ?? new Date(),
           image: data['image'] ?? undefined,
+          fileUrl: data['fileUrl'] ?? undefined,
+          fileName: data['fileName'] ?? undefined,
+          fileType: data['fileType'] ?? undefined,
           user: {
             _id: data['userId'] ?? '',
             name: data['userName'] ?? 'Unknown',
@@ -88,7 +112,7 @@ export default function ChatRoomScreen() {
   }, [roomId, isConfigured]);
 
   const onSend = useCallback(
-    async (newMessages: IMessage[] = []) => {
+    async (newMessages: ChatMessage[] = []) => {
       if (!user || !roomId || !isConfigured) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -97,12 +121,15 @@ export default function ChatRoomScreen() {
         await addDoc(collection(db, 'rooms', roomId, 'messages'), {
           text: msg.text ?? '',
           image: msg.image ?? null,
+          fileUrl: msg.fileUrl ?? null,
+          fileName: msg.fileName ?? null,
+          fileType: msg.fileType ?? null,
           createdAt: serverTimestamp(),
           userId: user.uid,
           userName: user.displayName,
           userAvatar: user.avatarColor,
         });
-      } catch (err) {
+      } catch {
         Alert.alert('Error', 'Failed to send message. Please try again.');
       }
     },
@@ -128,22 +155,14 @@ export default function ChatRoomScreen() {
     setUploading(true);
     try {
       const downloadURL = await uploadImageToImgBB(uri);
-
-      const fileId =
-        Date.now().toString() + Math.random().toString(36).substring(2, 9);
-
-      const imageMessage: IMessage = {
+      const fileId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+      const imageMessage: ChatMessage = {
         _id: fileId,
         text: '',
         createdAt: new Date(),
         image: downloadURL,
-        user: {
-          _id: user!.uid,
-          name: user!.displayName,
-          avatar: user!.avatarColor,
-        },
+        user: { _id: user!.uid, name: user!.displayName, avatar: user!.avatarColor },
       };
-
       await onSend([imageMessage]);
     } catch {
       Alert.alert('Upload failed', 'Could not upload image. Please try again.');
@@ -152,18 +171,84 @@ export default function ChatRoomScreen() {
     }
   };
 
+  const pickAndUploadFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const asset = result.assets[0];
+      setUploadingFile(true);
+
+      const fileUrl = await uploadFileToFileIO(
+        asset.uri,
+        asset.name,
+        asset.mimeType ?? 'application/octet-stream'
+      );
+
+      const fileId = Date.now().toString() + Math.random().toString(36).substring(2, 9);
+      const fileMessage: ChatMessage = {
+        _id: fileId,
+        text: '',
+        createdAt: new Date(),
+        fileUrl,
+        fileName: asset.name,
+        fileType: asset.mimeType ?? 'application/octet-stream',
+        user: { _id: user!.uid, name: user!.displayName, avatar: user!.avatarColor },
+      };
+      await onSend([fileMessage]);
+    } catch {
+      Alert.alert('Upload failed', 'Could not upload file. Please try again.');
+    } finally {
+      setUploadingFile(false);
+    }
+  };
+
   const renderAvatar = useCallback((props: any) => {
-    const avatarColor =
-      (props.currentMessage?.user?.avatar as string) ?? '#25D366';
-    const initial = (
-      (props.currentMessage?.user?.name as string) ?? 'U'
-    )[0].toUpperCase();
+    const avatarColor = (props.currentMessage?.user?.avatar as string) ?? '#25D366';
+    const initial = ((props.currentMessage?.user?.name as string) ?? 'U')[0].toUpperCase();
     return (
       <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
         <Text style={styles.avatarText}>{initial}</Text>
       </View>
     );
   }, []);
+
+  const renderCustomView = useCallback(
+    (props: any) => {
+      const msg = props.currentMessage as ChatMessage;
+      if (!msg?.fileUrl || !msg?.fileName) return null;
+      const icon = getFileIcon(msg.fileName);
+      const isSent = msg.user._id === user?.uid;
+      return (
+        <TouchableOpacity
+          style={[
+            styles.fileCard,
+            { borderColor: isSent ? 'rgba(0,0,0,0.08)' : 'rgba(0,0,0,0.08)' },
+          ]}
+          onPress={() => Linking.openURL(msg.fileUrl!)}
+          activeOpacity={0.7}
+        >
+          <View style={[styles.fileIconBox, { backgroundColor: colors.primary + '22' }]}>
+            <Ionicons name={icon as any} size={22} color={colors.primary} />
+          </View>
+          <View style={styles.fileInfo}>
+            <Text style={[styles.fileName, { color: colors.foreground }]} numberOfLines={1}>
+              {msg.fileName}
+            </Text>
+            <Text style={[styles.fileTap, { color: colors.mutedForeground }]}>
+              Tap to download
+            </Text>
+          </View>
+          <Ionicons name="download-outline" size={18} color={colors.mutedForeground} />
+        </TouchableOpacity>
+      );
+    },
+    [colors, user]
+  );
 
   const renderBubble = useCallback(
     (props: any) => (
@@ -198,21 +283,34 @@ export default function ChatRoomScreen() {
   );
 
   const renderActions = useCallback(
-    (props: any) => (
-      <Actions
-        {...props}
-        containerStyle={styles.actionsContainer}
-        icon={() =>
-          uploading ? (
+    (_props: any) => (
+      <View style={styles.actionsRow}>
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={pickAndUploadImage}
+          disabled={uploading || uploadingFile}
+        >
+          {uploading ? (
             <ActivityIndicator size="small" color={colors.primary} />
           ) : (
-            <Ionicons name="image-outline" size={26} color={colors.mutedForeground} />
-          )
-        }
-        onPressActionButton={pickAndUploadImage}
-      />
+            <Ionicons name="image-outline" size={24} color={colors.mutedForeground} />
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.actionBtn}
+          onPress={pickAndUploadFile}
+          disabled={uploading || uploadingFile}
+        >
+          {uploadingFile ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Ionicons name="attach" size={26} color={colors.mutedForeground} />
+          )}
+        </TouchableOpacity>
+      </View>
     ),
-    [uploading, colors]
+    [uploading, uploadingFile, colors]
   );
 
   const renderInputToolbar = useCallback(
@@ -299,7 +397,7 @@ export default function ChatRoomScreen() {
 
       <GiftedChat
         messages={messages}
-        onSend={onSend}
+        onSend={(msgs) => onSend(msgs as ChatMessage[])}
         user={{
           _id: user?.uid ?? 'guest',
           name: user?.displayName ?? 'Guest',
@@ -307,6 +405,7 @@ export default function ChatRoomScreen() {
         }}
         renderAvatar={renderAvatar}
         renderBubble={renderBubble}
+        renderCustomView={renderCustomView}
         renderSend={renderSend}
         renderActions={renderActions}
         renderInputToolbar={renderInputToolbar}
@@ -333,9 +432,7 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
     gap: 10,
   },
-  backBtn: {
-    padding: 8,
-  },
+  backBtn: { padding: 8 },
   headerAvatar: {
     width: 38,
     height: 38,
@@ -379,13 +476,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionsContainer: {
-    width: 44,
-    height: 44,
+  actionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginLeft: 4,
+    marginBottom: 4,
+  },
+  actionBtn: {
+    width: 40,
+    height: 40,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 0,
-    marginLeft: 4,
   },
   inputToolbar: {
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -395,6 +496,37 @@ const styles = StyleSheet.create({
   textInput: {
     fontSize: 15,
     lineHeight: 20,
+  },
+  fileCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 10,
+    marginTop: 6,
+    marginBottom: 4,
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    gap: 10,
+    maxWidth: 240,
+  },
+  fileIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fileInfo: {
+    flex: 1,
+  },
+  fileName: {
+    fontSize: 13,
+    fontFamily: 'Inter_600SemiBold',
+  },
+  fileTap: {
+    fontSize: 11,
+    fontFamily: 'Inter_400Regular',
+    marginTop: 2,
   },
   setup: { flex: 1 },
   setupBody: {
